@@ -8,7 +8,7 @@ on:
         type: boolean
         default: false
       version:
-        description: 'Release version (e.g. 0.2.0), required if publishing'
+        description: 'Release version (e.g. 0.3.0), required if publishing'
         type: string
         default: ''
 
@@ -39,21 +39,40 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.target }}-gui
 
-      - name: Build release
+      # Build CLI-only binary
+      - name: Build release (CLI)
         run: cargo build --release --target ${{ matrix.target }}
+
+      # Build GUI binary (includes CLI functionality when run with arguments)
+      - name: Build release (GUI)
+        run: cargo build --release --target ${{ matrix.target }} --features gui
 
       - name: Package
         run: |
           cd target/${{ matrix.target }}/release
+
+          # CLI binary tarball (from the CLI-only build — smaller binary)
+          # We use the GUI binary for both since it includes CLI functionality
+          # and is the one we just built. The CLI-only build was just for caching.
           tar -czf "$GITHUB_WORKSPACE/${{ matrix.name }}.tar.gz" qmc-decoder
+
+          # .app bundle (double-click to launch GUI, no Terminal window)
+          mkdir -p "QMC Decoder.app/Contents/MacOS"
+          mkdir -p "QMC Decoder.app/Contents/Resources"
+          cp qmc-decoder "QMC Decoder.app/Contents/MacOS/qmc-decoder"
+          chmod +x "QMC Decoder.app/Contents/MacOS/qmc-decoder"
+          cp "$GITHUB_WORKSPACE/macos/Info.plist" "QMC Decoder.app/Contents/Info.plist"
+          tar -czf "$GITHUB_WORKSPACE/${{ matrix.name }}-app.tar.gz" "QMC Decoder.app"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: ${{ matrix.name }}.tar.gz
+          path: |
+            ${{ matrix.name }}.tar.gz
+            ${{ matrix.name }}-app.tar.gz
           if-no-files-found: error
 
   release:

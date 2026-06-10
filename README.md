@@ -1,8 +1,31 @@
-# QMC 解码器
+<div align="center">
 
-> ⚠️ **仅支持 macOS**
+# 🎵 QMC Decoder
 
-使用 Rust 编写的 QQ 音乐加密音频文件（QMC1/QMC2 格式）解密工具，支持自动从 QQ 音乐 API 获取 ekey。
+**解密 QQ 音乐加密音频文件（QMC1/QMC2 格式）**
+
+支持自动获取 ekey · 内置图形界面 · 批量解密 · 仅 macOS
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![Rust](https://img.shields.io/badge/Rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+
+</div>
+
+---
+
+## 🖼️ 界面预览
+
+![GUI](imgs/gui.png)
+
+## ✨ 特性
+
+| | |
+|:---|:---|
+| 🖥️ **图形界面** | 内置 GUI，支持中英文切换、拖放文件、原生文件选择器 |
+| ⌨️ **CLI 模式** | 完整的命令行界面，适合脚本和自动化场景 |
+| 🔑 **自动获取 ekey** | 从本机 QQ 音乐客户端读取凭据，自动调用 API 获取解密密钥 |
+| 📂 **批量解密** | 传入目录即可批量处理所有支持的加密文件 |
+| 🔍 **文件信息** | `--info` 命令可检测文件格式、尾部类型、元数据，无需解密 |
+| 🍎 **macOS .app** | 双击 `.app` 即可启动图形界面，不弹出终端 |
 
 ## 支持的格式
 
@@ -14,7 +37,7 @@
 | QMC2 | `.mgg`, `.mgg0`, `.mgg1`, `.mggl` | `.ogg` | 是（ekey） |
 | QMC2 | `.mflac`, `.mflac0`, `.mflach` | `.flac` | 是（ekey） |
 
-## 关于 QMC 加密
+## 🔐 关于 QMC 加密
 
 QQ 音乐使用两种加密方案：
 
@@ -32,7 +55,115 @@ ekey 有三种存储方式：
 
 3. **musicex 格式**（最新版，QQ 音乐 ≥ 19.57）：ekey **未嵌入**文件中。文件尾部仅包含元数据（歌曲 ID、歌曲 mid、文件名）。必须通过 `--ekey` 参数提供 ekey 或使用 `--fetch-ekey` 自动从 QQ 音乐 API 获取。
 
-## 获取 ekey
+## 📦 安装
+
+### 从源码编译
+
+**CLI + GUI（推荐）：**
+
+```bash
+git clone https://github.com/ownlight6/qmc-decoder.git
+cd qmc-decoder
+cargo build --release --features gui
+```
+
+**仅 CLI（无图形界面）：**
+
+```bash
+cargo build --release
+```
+
+编译产物位于 `target/release/qmc-decoder`。
+
+### macOS .app 包
+
+macOS 上直接运行可执行文件不带参数会启动图形界面。使用 `.app` 包可以双击直接启动，无需终端：
+
+```bash
+./scripts/create-app-bundle.sh target/release/qmc-decoder
+```
+
+生成 `QMC Decoder.app`，双击即可打开图形界面。
+
+> CI 构建会自动生成 `.app` 包（`qmc-decoder-macos-*-app.tar.gz`），下载后解压即可使用。
+
+### 前置要求
+
+- Rust 1.70+（推荐使用 [rustup](https://rustup.rs/) 安装）
+- macOS（`--fetch-ekey` 功能依赖 macOS 版 QQ 音乐客户端）
+
+## 🚀 使用
+
+### 图形界面（需 `--features gui` 编译）
+
+```bash
+# 直接运行（无参数）自动启动图形界面
+qmc-decoder
+
+# 或显式指定 --gui
+qmc-decoder --gui
+```
+
+- **文件选择** — 点击浏览按钮选择文件，或直接拖放文件到窗口
+- **批量模式** — 勾选"批量模式"可选择文件夹，一次解密所有支持的加密文件
+- **EKey 输入** — 手动输入 EKey（密码模式，可显示/隐藏），或勾选"自动获取 EKey"
+- **自动获取 EKey** — 勾选后自动从本机 QQ 音乐凭据获取密钥（需已登录 QQ 音乐）
+- **中英文切换** — 右上角语言按钮，一键切换中文 / English
+- **文件选择器默认目录** — 自动打开 QQ 音乐下载文件夹
+
+> 如果未编译 GUI 功能，运行 `qmc-decoder` 不带参数会提示使用 `--features gui` 重新编译。
+
+### 命令行使用
+
+```bash
+# 查看文件信息（检测格式、尾部类型、元数据）
+qmc-decoder --info /path/to/file.mgg
+
+# 解密 QMC1 文件（无需密钥）
+qmc-decoder /path/to/file.qmcflac /path/to/output.flac
+
+# 解密带有 QTag 尾部的 QMC2 文件（自动提取 ekey）
+qmc-decoder /path/to/file.mgg1 /path/to/output.ogg
+
+# 解密 musicex 文件，自动获取 ekey
+qmc-decoder --fetch-ekey /path/to/file.mgg
+
+# 解密 musicex 文件，手动提供 ekey
+qmc-decoder --ekey "BASE64_EKEY" /path/to/file.mgg /path/to/output.ogg
+
+# 查看文件信息并检查凭据状态（判断 --fetch-ekey 是否可用）
+qmc-decoder --info --fetch-ekey /path/to/file.mgg
+
+# 批量解密目录中所有支持的文件
+qmc-decoder /path/to/input_dir/ /path/to/output_dir/
+
+# 如果未指定输出路径，输出文件将使用相同文件名并更改扩展名
+qmc-decoder /path/to/file.qmc0
+# 生成：/path/to/file.mp3
+```
+
+<details>
+<summary>📋 完整参数</summary>
+
+```
+qmc-decoder [OPTIONS] [INPUT] [OUTPUT]
+
+Arguments:
+  [INPUT]   输入文件或目录
+  [OUTPUT]  输出文件或目录（可选，默认同目录更改变扩展名）
+
+Options:
+      --ekey <EKEY>        EKey for QMC2 decryption (base64 encoded)
+      --fetch-ekey         自动从 QQ 音乐 API 获取 ekey（需本机登录 QQ 音乐）
+      --info               仅显示文件元数据，不解密
+      --gui                启动图形界面
+  -h, --help               显示帮助
+  -V, --version            显示版本
+```
+
+</details>
+
+## 🔑 获取 ekey
 
 对于使用 **musicex** 尾部的文件（最新版 QQ 音乐），ekey 并未存储在文件中。可选方案：
 
@@ -64,44 +195,7 @@ qmc-decoder --ekey "BASE64_EKEY" /path/to/file.mgg
 
 > **注意：** 同时提供 `--ekey` 和 `--fetch-ekey` 时，优先使用显式指定的 `--ekey`。
 
-## 使用方法
-
-```bash
-# 查看文件信息（检测格式、尾部类型、元数据）
-qmc-decoder --info /path/to/file.mgg
-
-# 解密 QMC1 文件（无需密钥）
-qmc-decoder /path/to/file.qmcflac /path/to/output.flac
-
-# 解密带有 QTag 尾部的 QMC2 文件（自动提取 ekey）
-qmc-decoder /path/to/file.mgg1 /path/to/output.ogg
-
-# 解密 musicex 文件，自动获取 ekey
-qmc-decoder --fetch-ekey /path/to/file.mgg
-
-# 解密 musicex 文件，手动提供 ekey
-qmc-decoder --ekey "BASE64_EKEY" /path/to/file.mgg /path/to/output.ogg
-
-# 查看文件信息并检查凭据状态（判断 --fetch-ekey 是否可用）
-qmc-decoder --info --fetch-ekey /path/to/file.mgg
-
-# 批量解密目录中所有支持的文件
-qmc-decoder /path/to/input_dir/ /path/to/output_dir/
-
-# 如果未指定输出路径，输出文件将使用相同文件名并更改扩展名
-qmc-decoder /path/to/file.qmc0
-# 生成：/path/to/file.mp3
-```
-
-## 构建
-
-```bash
-cargo build --release
-```
-
-编译后的二进制文件位于 `target/release/qmc-decoder`。
-
-## 技术细节
+## 🔧 技术细节
 
 ### QMC1 算法
 - 通过 8×7 种子映射表使用 Z 字形遍历模式生成 64 字节密钥表
@@ -140,6 +234,39 @@ cargo build --release
 
 完整的解密流程文档请参阅 [MGG 解密流程](MGG_DECRYPTION_FLOW.md)。
 
-## 许可证
+## 🧪 测试
 
-[GPL v3](LICENSE)
+```bash
+cargo test
+```
+
+包含 17 个单元测试，覆盖：
+
+- QMC1 密钥表生成、边界行为、周期性
+- QMC2 密钥推导（EncV1、EncV2、TC-TEA 加解密往返）
+- QMC2 Map 密码和 RC4 密码
+- musicex 尾部解析（正常数据、无效数据）
+- UTF-16LE 字符串解码
+- ekey 解析往返测试
+
+## 📁 项目结构
+
+```
+src/
+├── main.rs       — CLI/GUI 双模式入口
+├── lib.rs        — 库导出（解密逻辑、格式检测、文件处理）
+├── gui.rs        — egui 图形界面（需 --features gui）
+├── qmc1.rs       — QMC1 XOR 密码实现
+├── qmc2.rs       — QMC2 Map/RC4 密码实现 + ekey 解析
+└── ekey_fetch.rs — QQ 音乐 API ekey 自动获取
+imgs/
+└── gui.png          — GUI 界面截图
+macos/
+└── Info.plist       — macOS .app 包配置
+scripts/
+└── create-app-bundle.sh — macOS .app 打包脚本
+```
+
+## 📄 许可证
+
+本项目基于 [GNU General Public License v3.0](LICENSE) 许可证开源。
