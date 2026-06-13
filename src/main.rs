@@ -38,7 +38,7 @@ struct Args {
     ekey: Option<String>,
 
     /// Automatically fetch the ekey from QQ Music API for musicex files
-    /// Requires QQ Music to be logged in on this Mac
+    /// Requires QQ Music to be logged in on this computer
     #[arg(long)]
     fetch_ekey: bool,
 

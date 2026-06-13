@@ -1,6 +1,6 @@
 # QQ Music MGG 加密文件解密流程
 
-本文档记录了 QQ Music macOS 客户端（≥ 19.57）加密音频文件（.mgg / .mflac）的完整解密流程，包括 musicex 文件格式分析、ekey 获取 API 调用、以及认证凭据的提取方法。
+本文档记录了 QQ Music 客户端（macOS ≥ 19.57, Windows 22.x）加密音频文件（.mgg / .mflac）的完整解密流程，包括 musicex 文件格式分析、ekey 获取 API 调用、以及认证凭据的提取方法。**Windows 和 macOS 的凭据提取方式有根本差异**，详见[认证凭据提取](#认证凭据提取)章节。
 
 ## 目录
 
@@ -119,7 +119,13 @@ WHERE file LIKE '%.mgg' OR file LIKE '%.mflac%';
 
 ## 认证凭据提取
 
-### 凭据存储位置
+**macOS 与 Windows 的凭据存储机制完全不同**，但最终获取的凭据（`uin` + `authst`）格式一致，均可用于调用 GetEVkey API。
+
+---
+
+### macOS 凭据提取
+
+#### 凭据存储位置
 
 ```
 ~/Library/Containers/com.tencent.QQMusicMac/Data/Library/Preferences/com.tencent.QQMusicMac.plist
@@ -127,7 +133,7 @@ WHERE file LIKE '%.mgg' OR file LIKE '%.mflac%';
 
 `AutoLoginUserInfo` 字段是一个 NSKeyedArchiver 编码的 plist 二进制数据，解码后包含以下关键信息：
 
-### 凭据字段
+#### 凭据字段
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
@@ -139,7 +145,7 @@ WHERE file LIKE '%.mgg' OR file LIKE '%.mflac%';
 | `strRefreshKey` | 刷新密钥 | `<Base64编码字符串>` |
 | **`strAuthst`** | **API 认证密钥** | `<长Base64编码字符串>` |
 
-### Python 提取脚本
+#### Python 提取脚本
 
 ```python
 import plistlib
@@ -167,6 +173,70 @@ def extract_auth_credentials():
 ```
 
 > **注意**：`strAuthst` 是调用 API 时的核心认证凭据（对应 API 参数 `authst`）。
+
+---
+
+### Windows 凭据提取
+
+Windows 版 QQ Music（≥ 22.x）**没有持久化的 authst 文件**。与 macOS 不同，authst 仅存在于运行中的 QQMusic.exe 进程内存中，需要借助 Win32 API 从中提取。
+
+#### 凭据来源
+
+| 凭据 | 来源 | 格式 |
+|------|------|------|
+| `uin` | `%APPDATA%\Tencent\QQMusic\QQMusicServiceConfig.ini` | `[Account]\nUin=<数字QQ号>` |
+| `authst` | QQMusic.exe 进程内存中的 JSON 字符串 | `"authst":"<Base64URL编码字符串>"` |
+
+#### 提取原理
+
+1. **读取 UIN**：直接解析 `QQMusicServiceConfig.ini` 中的 `Uin` 字段（纯文本 INI）
+2. **定位进程**：通过 `CreateToolhelp32Snapshot` + `Process32FirstW` 枚举进程，匹配 `QQMusic.exe`、`WeChatAppEx.exe`、`qmbrowser.exe`
+3. **扫描内存**：
+   - 用 `OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ)` 打开目标进程
+   - 用 `VirtualQueryEx` 遍历进程地址空间，筛选 `MEM_COMMIT | MEM_PRIVATE | MEM_IMAGE` 可读内存区域
+   - 用 `ReadProcessMemory` 以 1MB 分块读取内存
+   - 搜索 `"authst":"` JSON key pattern，提取紧跟其后的 Base64URL 字符串
+
+#### Rust 实现要点
+
+```rust
+// MEMORY_BASIC_INFORMATION 结构（Windows 10 1803+ 包含 PartitionId）
+#[repr(C)]
+struct MEMORY_BASIC_INFORMATION {
+    base_address: *mut c_void,    // 8 bytes
+    allocation_base: *mut c_void,  // 8 bytes
+    allocation_protect: u32,       // 4 bytes
+    partition_id: u16,            // Win 10 1803+，必须包含！
+    region_size: usize,           // 8 bytes（#[repr(C)] 自动添加 2 字节 padding）
+    state: u32,                   // 4 bytes
+    protect: u32,                 // 4 bytes
+    _type: u32,                   // 4 bytes
+}
+```
+
+> ⚠️ **`partition_id` 是关键**：Windows 10 1803+ 在 `AllocationProtect` 和 `RegionSize` 之间新增了 2 字节的 `PartitionId`。缺少该字段将导致 `region_size`、`state`、`protect` 从错误的偏移量读取，使 `VirtualQueryEx` 返回的 `state` 值变成 `protect`（如 `PAGE_READWRITE=0x04` 而非 `MEM_COMMIT=0x1000`），导致所有内存区域都被跳过。
+
+#### 性能优化
+
+- **只扫描 `MEM_PRIVATE`（堆/栈）和 `MEM_IMAGE`（DLL 数据段）**类型，跳过 `MEM_MAPPED`（文件映射）
+- **仅搜索 JSON key pattern**：不扫描所有 base64 字符串，找到 `"authst":"<token>"` 立即返回
+- 实测 QQMusic.exe 进程扫描约 0.5 秒完成
+
+---
+
+### 平台对比汇总
+
+| 维度 | macOS | Windows |
+|------|-------|---------|
+| **UIN 来源** | plist 中 NSKeyedArchiver 解码 | `QQMusicServiceConfig.ini` 纯文本 |
+| **authst 来源** | plist 文件 `AutoLoginUserInfo` | QQMusic.exe 进程内存 |
+| **存储机制** | NSKeyedArchiver（二进制 plist） | 运行时内存中的 JSON 字符串 |
+| **提取方式** | 文件读取 + plist 解析 | Win32 API 跨进程内存读取 |
+| **权限要求** | 无（同用户文件读取） | 无（同用户 OpenProcess） |
+| **QQ Music 是否必须运行** | ❌ 否 | ✅ 是（authst 在内存中） |
+| **authst 持久性** | 持久化到 plist 文件 | 仅运行时存在 |
+| **实现复杂度** | 低 | 中 |
+| **API platform 参数** | `"20"` | `"27"` |
 
 ---
 
@@ -216,6 +286,7 @@ POST https://u.y.qq.com/cgi-bin/musicu.fcg
 | `param.filename` | 资源文件名 | musicex footer 的 filename 字段（**必须含 .mgg 后缀**） |
 | `param.songmid` | 歌曲 mid | musicex footer 的 media_mid 字段 |
 | `param.songtype` | 歌曲类型 | `1` = 加密文件（**必须为 1**） |
+| `param.platform` | 平台标识 | `"20"`（macOS）/ `"27"`（Windows）— 自动根据编译目标选择 |
 
 ### ⚠️ 重要注意事项
 
@@ -289,9 +360,20 @@ API 返回的 `expiration` 字段为 **80400 秒**（约 22.3 小时），ekey �
                ▼
 ┌─────────────────────────────────┐
 │  3. 提取认证凭据                │
-│     读取 QQ Music plist 文件     │
-│     解码 AutoLoginUserInfo      │
-│     获取 uin + authst            │
+│                                 │
+│  ┌─ macOS ──────────────────┐   │
+│  │ 读取 plist 文件           │   │
+│  │ 解码 AutoLoginUserInfo   │   │
+│  │ 获取 uin + authst        │   │
+│  └──────────────────────────┘   │
+│                                 │
+│  ┌─ Windows ────────────────┐   │
+│  │ 读取 QQMusicServiceConfig│   │
+│  │ .ini → UIN               │   │
+│  │ 扫描 QQMusic.exe 进程内存│   │
+│  │ 搜索 "authst":"..." JSON │   │
+│  │ 提取 authst + uin        │   │
+│  └──────────────────────────┘   │
 └──────────────┬──────────────────┘
                │
                ▼

@@ -331,7 +331,7 @@ pub fn decrypt_file(
                              You can either:\n\
                              1. Provide the ekey via --ekey argument\n\
                              2. Use --fetch-ekey to automatically fetch the ekey from QQ Music API\n\
-                                (requires QQ Music to be logged in on this Mac)\n\n\
+                                (requires QQ Music to be logged in on this computer)\n\n\
                              Run with --info to see file metadata.",
                             song_id, mid
                         ));

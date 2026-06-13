@@ -23,9 +23,15 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
             name: qmc-decoder-macos-arm64
+            ext: tar.gz
           - os: macos-15
             target: x86_64-apple-darwin
             name: qmc-decoder-macos-x86_64
+            ext: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: qmc-decoder-windows-x86_64
+            ext: zip
 
     steps:
       - name: Checkout
@@ -49,14 +55,14 @@ jobs:
       - name: Build release (GUI)
         run: cargo build --release --target ${{ matrix.target }} --features gui
 
-      - name: Package
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
         run: |
           cd target/${{ matrix.target }}/release
 
-          # CLI binary tarball (from the CLI-only build — smaller binary)
-          # We use the GUI binary for both since it includes CLI functionality
-          # and is the one we just built. The CLI-only build was just for caching.
-          tar -czf "$GITHUB_WORKSPACE/${{ matrix.name }}.tar.gz" qmc-decoder
+          # CLI binary tarball
+          tar -czf "$GITHUB_WORKSPACE/${{ matrix.name }}.${{ matrix.ext }}" qmc-decoder
 
           # .app bundle (double-click to launch GUI, no Terminal window)
           mkdir -p "QMC Decoder.app/Contents/MacOS"
@@ -66,13 +72,26 @@ jobs:
           cp "$GITHUB_WORKSPACE/macos/Info.plist" "QMC Decoder.app/Contents/Info.plist"
           tar -czf "$GITHUB_WORKSPACE/${{ matrix.name }}-app.tar.gz" "QMC Decoder.app"
 
-      - name: Upload artifact
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          Compress-Archive -Path qmc-decoder.exe -DestinationPath "$env:GITHUB_WORKSPACE/${{ matrix.name }}.${{ matrix.ext }}"
+
+      - name: Upload CLI binary
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: |
-            ${{ matrix.name }}.tar.gz
-            ${{ matrix.name }}-app.tar.gz
+          path: ${{ matrix.name }}.${{ matrix.ext }}
+          if-no-files-found: error
+
+      - name: Upload .app bundle (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}-app
+          path: ${{ matrix.name }}-app.tar.gz
           if-no-files-found: error
 
   release:

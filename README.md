@@ -4,7 +4,7 @@
 
 **解密 QQ 音乐加密音频文件（QMC1/QMC2 格式）**
 
-支持自动获取 ekey · 内置图形界面 · 批量解密 · 仅 macOS
+支持自动获取 ekey · 内置图形界面 · 批量解密 · 支持 Windows / macOS
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![Rust](https://img.shields.io/badge/Rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
@@ -14,7 +14,9 @@
 
 ## 🖼️ 界面预览
 
-![GUI](imgs/gui.png)
+| Windows | macOS |
+|:-------:|:-----:|
+| ![Windows GUI](imgs/win.png) | ![macOS GUI](imgs/mac.png) |
 
 ## ✨ 特性
 
@@ -22,7 +24,7 @@
 |:---|:---|
 | 🖥️ **图形界面** | 内置 GUI，支持中英文切换、拖放文件、原生文件选择器 |
 | ⌨️ **CLI 模式** | 完整的命令行界面，适合脚本和自动化场景 |
-| 🔑 **自动获取 ekey** | 从本机 QQ 音乐客户端读取凭据，自动调用 API 获取解密密钥 |
+| 🔑 **自动获取 ekey** | 从本机 QQ 音乐客户端读取凭据，自动调用 API 获取解密密钥（**macOS / Windows 均支持**） |
 | 📂 **批量解密** | 传入目录即可批量处理所有支持的加密文件 |
 | 🔍 **文件信息** | `--info` 命令可检测文件格式、尾部类型、元数据，无需解密 |
 | 🍎 **macOS .app** | 双击 `.app` 即可启动图形界面，不弹出终端 |
@@ -90,7 +92,9 @@ macOS 上直接运行可执行文件不带参数会启动图形界面。使用 `
 ### 前置要求
 
 - Rust 1.70+（推荐使用 [rustup](https://rustup.rs/) 安装）
-- macOS（`--fetch-ekey` 功能依赖 macOS 版 QQ 音乐客户端）
+- macOS 或 Windows（`--fetch-ekey` 功能需要本机已登录 QQ 音乐客户端）
+  - **macOS**：QQ Music 登录后凭据自动持久化
+  - **Windows**：QQ 音乐需保持运行中（authst 提取自进程内存），如遇权限问题可尝试以管理员身份运行
 
 ## 🚀 使用
 
@@ -180,6 +184,15 @@ qmc-decoder --fetch-ekey /path/to/file.mgg
 2. 读取本机 QQ 音乐的认证凭据
 3. 调用 `music.vkey.GetEVkey` API 获取 ekey
 4. 使用获取的 ekey 解密文件
+
+**平台差异：**
+
+| 平台 | 认证凭据来源 | 前置条件 |
+|------|-------------|---------|
+| **macOS** | QQ Music plist 文件 | 已登录 QQ Music 即可（无需运行中） |
+| **Windows** | QQMusic.exe 进程内存 | QQ 音乐**必须正在运行且已登录**（authst 仅存在于运行时内存中） |
+
+> 可使用 `qmc-decoder --info --fetch-ekey <file>` 检查本机凭据状态，确认 `--fetch-ekey` 是否可用。
 
 ### 方案 2：使用旧版 QQ 音乐客户端
 
