@@ -1,61 +1,24 @@
-name: Build, test and package qmc-decoder
+name: Package qmc-decoder
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
-  pull_request:
   workflow_dispatch:
 
 jobs:
-  # Fast feedback for every PR: compile + run tests, no packaging.
-  build-test:
-    name: Build & test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # Linux is not included: the tauri shell needs webkit2gtk system libs.
-        os: [macos-15, windows-latest]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Build workspace
-        run: cargo build --release --workspace
-
-      - name: Run tests
-        run: cargo test --workspace
-
-  # Produce real installers (Windows .exe/.msi, macOS .dmg/.app) with
-  # tauri-action. On a v* tag push it also creates a draft GitHub Release
-  # with the bundles attached; otherwise the bundles are uploaded as
-  # workflow artifacts so they can be downloaded from the run page.
   package:
-    name: Package installer (${{ matrix.name }})
-    if: github.event_name != 'pull_request'
-    needs: build-test
+    name: Package & publish (${{ matrix.name }})
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          # macos-15 runners are Apple Silicon -> native arm64 build, matches local dev
+          # macos-15 runners are Apple Silicon -> native arm64 build
           - name: macos-arm64
             os: macos-15
             args: ""
-          # Intel Macs: cross-compile x86_64 from the arm64 runner (works because
-          # the app is pure Rust + Apple SDK frameworks, no C dependencies)
+          # Intel Macs: cross-compile x86_64 from the arm64 runner
           - name: macos-x64
             os: macos-15
             args: --target x86_64-apple-darwin
@@ -81,19 +44,15 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Bundle installers
+      - name: Build, bundle & publish
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: src-tauri
-          uploadWorkflowArtifacts: true
           args: ${{ matrix.args }}
-          # Only create a GitHub Release when a version tag (v*) is pushed;
-          # on other pushes/dispatches the bundles are just uploaded as
-          # workflow artifacts.
-          tagName: ${{ startsWith(github.ref, 'refs/tags/') && 'v__VERSION__' || '' }}
+          tagName: v__VERSION__
           releaseName: QMC Decoder v__VERSION__
           releaseBody: See the assets to download and install this version.
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
