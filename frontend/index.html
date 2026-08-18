@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QMC Decoder</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18V5l12-2v13" />
+            <circle cx="6" cy="18" r="3" />
+            <circle cx="18" cy="16" r="3" />
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>QMC Decoder</h1>
+          <p>QQ 音乐加密音频 · 本地解密</p>
+        </div>
+      </div>
+      <a class="github" href="https://github.com/ownlight6/qmc-decoder" target="_blank" rel="noreferrer">GitHub <span class="arrow">↗</span></a>
+    </header>
+
+    <main class="grid">
+      <!-- 左栏：添加文件 -->
+      <section class="card files-card">
+        <div class="card-head">
+          <h2>添加文件</h2>
+          <span class="count" id="count" hidden></span>
+        </div>
+
+        <div class="dropzone" id="dropzone">
+          <div class="dz-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v11" />
+              <path d="m7 9 5 5 5-5" />
+              <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+            </svg>
+          </div>
+          <p class="dz-text">
+            <strong>拖放文件或文件夹到这里</strong>
+            <span>或点击下方按钮选择</span>
+          </p>
+          <ul class="dz-formats" aria-label="支持的文件格式">
+            <li>qmc0</li><li>qmc2</li><li>qmc3</li><li>qmcflac</li><li>qmcogg</li>
+            <li>mgg</li><li>mgg0</li><li>mgg1</li><li>mggl</li>
+            <li>mflac</li><li>mflac0</li><li>mflach</li>
+          </ul>
+          <div class="dz-actions">
+            <button id="btn-files" class="btn secondary">选择文件</button>
+            <button id="btn-folder" class="btn secondary">选择文件夹</button>
+          </div>
+        </div>
+
+        <p class="empty-hint" id="empty-hint" hidden></p>
+        <ul class="filelist" id="filelist"></ul>
+      </section>
+
+      <!-- 右栏：解密选项 -->
+      <section class="card options-card">
+        <div class="card-head"><h2>解密选项</h2></div>
+
+        <div class="field">
+          <label for="outputDir">输出目录<span class="opt">（留空则输出到每个文件的所在目录）</span></label>
+          <div class="field-row">
+            <input id="outputDir" type="text" placeholder="例如：C:\Music\decoded 或 /Users/me/Music/decoded" spellcheck="false" />
+            <button id="btn-output" class="btn secondary">浏览…</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="ekey">EKey<span class="opt">（可选，musicex 格式且不自动获取时才需要）</span></label>
+          <div class="field-row">
+            <input id="ekey" type="password" placeholder="Base64 编码的 EKey" spellcheck="false" />
+            <button id="btn-toggle-ekey" class="btn secondary" type="button">显示</button>
+          </div>
+        </div>
+
+        <label class="check">
+          <input type="checkbox" id="autoFetch" />
+          <span class="check-box" aria-hidden="true">
+            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2.5 6.5 2.5 2.5 4.5-5"/></svg>
+          </span>
+          <span class="check-label">自动从 QQ 音乐获取 EKey（需本机已登录 QQ 音乐）</span>
+        </label>
+        <p class="cred-note" id="cred-note" hidden></p>
+      </section>
+
+      <!-- 底栏：主操作（常驻可见） + 全局进度 -->
+      <div class="actions-bar">
+        <button id="btn-decrypt" class="btn primary">解密</button>
+        <button id="btn-clear" class="btn ghost">清空列表</button>
+        <div class="progress" id="progress" hidden>
+          <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+          <span class="progress-label" id="progressText"></span>
+        </div>
+      </div>
+    </main>
+
+    <footer class="foot">
+      <p>解密过程在本机完成，仅自动获取 EKey 时需要网络</p>
+    </footer>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <span class="toast-dot" aria-hidden="true"></span>
+    <span class="toast-msg" id="toast-msg"></span>
+    <button id="toast-close" class="toast-close" type="button" aria-label="关闭" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="18" y1="6" x2="6" y2="18" />
+        <line x1="6" y1="6" x2="18" y2="18" />
+      </svg>
+    </button>
+  </div>
+
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>文件信息</h3>
+        <button id="modal-close" class="btn ghost icon-btn" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <dl class="info" id="info-details"></dl>
+      <div class="info-path" id="info-path"></div>
+    </div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

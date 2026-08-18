@@ -1,37 +1,22 @@
-name: Build qmc-decoder
+name: Build, test and package qmc-decoder
 
 on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
   workflow_dispatch:
-    inputs:
-      publish_release:
-        description: 'Publish to GitHub Releases?'
-        type: boolean
-        default: false
-      version:
-        description: 'Release version (e.g. 0.3.0), required if publishing'
-        type: string
-        default: ''
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
+  # Fast feedback for every PR: compile + run tests, no packaging.
+  build-test:
+    name: Build & test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-            target: aarch64-apple-darwin
-            name: qmc-decoder-macos-arm64
-            ext: tar.gz
-          - os: macos-15
-            target: x86_64-apple-darwin
-            name: qmc-decoder-macos-x86_64
-            ext: tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            name: qmc-decoder-windows-x86_64
-            ext: zip
+        # Linux is not included: the tauri shell needs webkit2gtk system libs.
+        os: [macos-15, windows-latest]
 
     steps:
       - name: Checkout
@@ -39,83 +24,76 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}-gui
+          workspaces: src-tauri
 
-      # Build CLI-only binary
-      - name: Build release (CLI)
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build workspace
+        run: cargo build --release --workspace
 
-      # Build GUI binary (includes CLI functionality when run with arguments)
-      - name: Build release (GUI)
-        run: cargo build --release --target ${{ matrix.target }} --features gui
+      - name: Run tests
+        run: cargo test --workspace
 
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          cd target/${{ matrix.target }}/release
-
-          # CLI binary tarball
-          tar -czf "$GITHUB_WORKSPACE/${{ matrix.name }}.${{ matrix.ext }}" qmc-decoder
-
-          # .app bundle (double-click to launch GUI, no Terminal window)
-          mkdir -p "QMC Decoder.app/Contents/MacOS"
-          mkdir -p "QMC Decoder.app/Contents/Resources"
-          cp qmc-decoder "QMC Decoder.app/Contents/MacOS/qmc-decoder"
-          chmod +x "QMC Decoder.app/Contents/MacOS/qmc-decoder"
-          cp "$GITHUB_WORKSPACE/macos/Info.plist" "QMC Decoder.app/Contents/Info.plist"
-          tar -czf "$GITHUB_WORKSPACE/${{ matrix.name }}-app.tar.gz" "QMC Decoder.app"
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          cd target/${{ matrix.target }}/release
-          Compress-Archive -Path qmc-decoder.exe -DestinationPath "$env:GITHUB_WORKSPACE/${{ matrix.name }}.${{ matrix.ext }}"
-
-      - name: Upload CLI binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.name }}.${{ matrix.ext }}
-          if-no-files-found: error
-
-      - name: Upload .app bundle (macOS)
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.name }}-app
-          path: ${{ matrix.name }}-app.tar.gz
-          if-no-files-found: error
-
-  release:
-    name: Publish Release
-    needs: build
-    runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.publish_release == 'true' && github.event.inputs.version != '' }}
+  # Produce real installers (Windows .exe/.msi, macOS .dmg/.app) with
+  # tauri-action. On a v* tag push it also creates a draft GitHub Release
+  # with the bundles attached; otherwise the bundles are uploaded as
+  # workflow artifacts so they can be downloaded from the run page.
+  package:
+    name: Package installer (${{ matrix.name }})
+    if: github.event_name != 'pull_request'
+    needs: build-test
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-15 runners are Apple Silicon -> native arm64 build, matches local dev
+          - name: macos-arm64
+            os: macos-15
+            args: ""
+          # Intel Macs: cross-compile x86_64 from the arm64 runner (works because
+          # the app is pure Rust + Apple SDK frameworks, no C dependencies)
+          - name: macos-x64
+            os: macos-15
+            args: --target x86_64-apple-darwin
+          # windows-latest produces both NSIS (.exe) and MSI (.msi) installers
+          - name: windows
+            os: windows-latest
+            args: ""
 
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          tag_name: v${{ github.event.inputs.version }}
-          name: v${{ github.event.inputs.version }}
-          files: dist/*
-          draft: false
-          prerelease: false
+          # Only the Intel cross-compile target needs an explicit install;
+          # arm64 is the native target on macos-15 runners
+          targets: ${{ matrix.name == 'macos-x64' && 'x86_64-apple-darwin' || '' }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Bundle installers
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: src-tauri
+          uploadWorkflowArtifacts: true
+          args: ${{ matrix.args }}
+          # Only create a GitHub Release when a version tag (v*) is pushed;
+          # on other pushes/dispatches the bundles are just uploaded as
+          # workflow artifacts.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && 'v__VERSION__' || '' }}
+          releaseName: QMC Decoder v__VERSION__
+          releaseBody: See the assets to download and install this version.
+          releaseDraft: true
+          prerelease: false

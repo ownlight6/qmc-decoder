@@ -1,3 +1,7 @@
 /target
 .DS_Store
 *.app
+
+# Tauri generated files
+/src-tauri/gen/schemas
+node_modules

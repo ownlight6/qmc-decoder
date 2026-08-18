@@ -1,7 +1,7 @@
 //! QMC Decoder library
 //!
 //! Provides core decryption logic for QQ Music encrypted audio files
-//! (QMC1 and QMC2 formats). Used by both the CLI and GUI frontends.
+//! (QMC1 and QMC2 formats), consumed by the Tauri frontend via commands.
 
 mod ekey_fetch;
 mod qmc1;

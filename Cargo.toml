@@ -1,20 +1,19 @@
+[workspace]
+members = ["src-tauri"]
+resolver = "2"
+
 [package]
 name = "qmc-decoder"
 version = "0.3.0"
 edition = "2021"
-description = "Decrypt QQ Music encrypted audio files (QMC1/QMC2 formats) with auto ekey fetching"
+description = "Decrypt QQ Music encrypted audio files (QMC1/QMC2 formats) with auto ekey fetching (core library, driven by a Tauri frontend)"
 license = "GPL-3.0"
 
 [lib]
 name = "qmc_decoder"
 path = "src/lib.rs"
 
-[features]
-default = []
-gui = ["dep:eframe", "dep:egui", "dep:rfd", "dep:pollster"]
-
 [dependencies]
-clap = { version = "4", features = ["derive"] }
 base64 = "0.22"
 tc_tea = "0.1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
@@ -23,9 +22,3 @@ serde_json = "1"
 plist = "1"
 tokio = { version = "1", features = ["rt"] }
 dirs = "6"
-
-# GUI (optional)
-eframe = { version = "0.30", optional = true }
-egui = { version = "0.30", optional = true }
-rfd = { version = "0.15", optional = true }
-pollster = { version = "0.4", optional = true }
