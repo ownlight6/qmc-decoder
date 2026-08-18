@@ -4,6 +4,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create, e.g. v0.4.0 (published from current branch HEAD)"
+        required: true
+        type: string
 
 jobs:
   package:
@@ -51,8 +56,10 @@ jobs:
         with:
           projectPath: src-tauri
           args: ${{ matrix.args }}
-          tagName: v__VERSION__
-          releaseName: QMC Decoder v__VERSION__
+          # Manual runs use the tag typed in the dispatch dialog;
+          # tag pushes use the app version from tauri.conf.json.
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || 'v__VERSION__' }}
+          releaseName: QMC Decoder ${{ github.event_name == 'workflow_dispatch' && inputs.tag || 'v__VERSION__' }}
           releaseBody: See the assets to download and install this version.
           releaseDraft: false
           prerelease: false

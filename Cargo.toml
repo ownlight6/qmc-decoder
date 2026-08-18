@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "qmc-decoder"
-version = "0.3.0"
+version = "1.3.0"
 edition = "2021"
 description = "Decrypt QQ Music encrypted audio files (QMC1/QMC2 formats) with auto ekey fetching (core library, driven by a Tauri frontend)"
 license = "GPL-3.0"

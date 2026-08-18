@@ -1,6 +1,6 @@
 [package]
 name = "qmc-decoder-app"
-version = "0.3.0"
+version = "1.3.0"
 description = "QMC Decoder desktop app: Tauri frontend driving the qmc_decoder core library"
 edition = "2021"
 

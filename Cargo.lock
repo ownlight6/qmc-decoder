@@ -2783,7 +2783,7 @@ dependencies = [
 
 [[package]]
 name = "qmc-decoder"
-version = "0.3.0"
+version = "1.3.0"
 dependencies = [
  "base64 0.22.1",
  "dirs",
@@ -2797,7 +2797,7 @@ dependencies = [
 
 [[package]]
 name = "qmc-decoder-app"
-version = "0.3.0"
+version = "1.3.0"
 dependencies = [
  "dirs",
  "qmc-decoder",
