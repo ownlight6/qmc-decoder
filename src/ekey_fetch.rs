@@ -13,6 +13,8 @@ use std::io::Cursor;
 use plist::Value;
 use std::path::Path;
 
+use crate::qmc2::Qmc2Crypto;
+
 /// HTTP User-Agent header sent to QQ Music API. Must match a real browser
 /// so the API doesn't reject the request. Platform-specific to avoid
 /// being flagged as a mismatched client.
@@ -42,6 +44,8 @@ pub enum EkeyFetchError {
     NetworkError(String),
     /// Failed to parse plist or JSON
     ParseError(String),
+    /// STag file whose ekey could not be resolved from the local library
+    StagUnresolved(String),
 }
 
 impl std::fmt::Display for EkeyFetchError {
@@ -72,6 +76,9 @@ impl std::fmt::Display for EkeyFetchError {
             }
             EkeyFetchError::ParseError(msg) => {
                 write!(f, "Parse error: {}", msg)
+            }
+            EkeyFetchError::StagUnresolved(msg) => {
+                write!(f, "STag file: {}", msg)
             }
         }
     }
@@ -253,6 +260,131 @@ fn parse_nskeyed_archiver_credentials(data: &[u8]) -> Result<QQMusicCredentials,
     })?;
 
     Ok(QQMusicCredentials { uin, authst })
+}
+
+// ============================================================
+// STag footer support (newer QMC2: ekey is not embedded)
+// ============================================================
+
+/// Metadata extracted from an STag footer.
+#[derive(Debug, Clone)]
+pub struct StagInfo {
+    pub song_id: u32,
+    pub media_mid: String,
+}
+
+/// Parse the STag footer: `<meta><u32 BE meta_size><"STag">`.
+/// meta is CSV, typically `<song_id>,<n>,<media_mid>`.
+pub fn parse_stag_footer(data: &[u8]) -> Result<StagInfo, EkeyFetchError> {
+    if data.len() < 12 || &data[data.len() - 4..] != b"STag" {
+        return Err(EkeyFetchError::ParseError(
+            "File has neither a musicex nor an STag footer; auto-fetch needs one of them \
+             (provide the ekey manually instead)"
+                .to_string(),
+        ));
+    }
+    let meta_size = u32::from_be_bytes(data[data.len() - 8..data.len() - 4].try_into().unwrap())
+        as usize;
+    if meta_size == 0 || meta_size + 8 > data.len() {
+        return Err(EkeyFetchError::ParseError(
+            "Invalid STag footer: bad meta size".to_string(),
+        ));
+    }
+    let meta = String::from_utf8_lossy(&data[data.len() - 8 - meta_size..data.len() - 8])
+        .to_string();
+    let fields: Vec<&str> = meta.split(',').collect();
+    let media_mid = fields
+        .last()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if media_mid.is_empty() {
+        return Err(EkeyFetchError::ParseError(
+            "Invalid STag footer: media_mid is missing".to_string(),
+        ));
+    }
+    let song_id = fields
+        .first()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    Ok(StagInfo { song_id, media_mid })
+}
+
+/// Directory where the QQ Music macOS client keeps its own downloaded copies.
+#[cfg(target_os = "macos")]
+fn qqmusic_local_library_dir() -> std::path::PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    home.join("Library/Containers/com.tencent.QQMusicMac/Data/Library/Application Support/QQMusicMac/iQmc")
+}
+
+/// STag files carry no songmid, but the GetEVkey API needs one.
+/// QQ Music's own local copies use the musicex footer which *does* carry the
+/// songmid, so resolve it by finding the same song in the local library.
+#[cfg(target_os = "macos")]
+fn resolve_stag_via_local_library(stag: &StagInfo) -> Result<MusicexInfo, EkeyFetchError> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let dir = qqmusic_local_library_dir();
+    let entries = std::fs::read_dir(&dir).map_err(|e| {
+        EkeyFetchError::StagUnresolved(format!(
+            "cannot read the local QQ Music library ({}): {}",
+            dir.display(),
+            e
+        ))
+    })?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(
+            ext.as_str(),
+            "mflac" | "mflac0" | "mflach" | "mgg" | "mgg0" | "mgg1" | "mggl"
+        ) {
+            continue;
+        }
+        let mut file = match std::fs::File::open(&path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        if len < 256 {
+            continue;
+        }
+        let mut buf = vec![0u8; 256];
+        if file.seek(SeekFrom::End(-256)).is_err() || file.read_exact(&mut buf).is_err() {
+            continue;
+        }
+        if let Ok(info) = parse_musicex_footer(&buf) {
+            if info.song_id == stag.song_id || info.filename.contains(&stag.media_mid) {
+                eprintln!(
+                    "Resolved STag via local library copy: {} (song_id={}, mid={})",
+                    path.display(),
+                    info.song_id,
+                    info.media_mid
+                );
+                return Ok(info);
+            }
+        }
+    }
+
+    Err(EkeyFetchError::StagUnresolved(format!(
+        "no musicex copy of song_id={} was found in the local QQ Music library ({}). \
+         Re-download the song in QQ Music, or provide the ekey manually.",
+        stag.song_id,
+        dir.display()
+    )))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_stag_via_local_library(stag: &StagInfo) -> Result<MusicexInfo, EkeyFetchError> {
+    Err(EkeyFetchError::StagUnresolved(format!(
+        "automatic resolution is only implemented on macOS (song_id={}, media_mid={}); \
+         provide the ekey manually",
+        stag.song_id, stag.media_mid
+    )))
 }
 
 // ============================================================
@@ -964,9 +1096,14 @@ pub async fn call_get_evkey_api(
         )));
     }
 
-    let response: MusicuResponse = resp
-        .json()
+    let text = resp
+        .text()
         .await
+        .map_err(|e| EkeyFetchError::NetworkError(e.to_string()))?;
+    if std::env::var("QMC_DEBUG_API").is_ok() {
+        eprintln!("[GetEVkey raw response] {}", text);
+    }
+    let response: MusicuResponse = serde_json::from_str(&text)
         .map_err(|e| EkeyFetchError::ParseError(format!("Failed to parse API response: {}", e)))?;
 
     let req_data = response.req.ok_or_else(|| {
@@ -1032,7 +1169,19 @@ pub async fn fetch_ekey(input_path: &Path) -> Result<String, EkeyFetchError> {
     let data = std::fs::read(input_path)
         .map_err(|e| EkeyFetchError::ParseError(format!("Failed to read file: {}", e)))?;
 
-    let info = parse_musicex_footer(&data)?;
+    let info = match parse_musicex_footer(&data) {
+        Ok(info) => info,
+        Err(EkeyFetchError::NoMusicexFooter) => {
+            // Not musicex: try the STag footer (no ekey embedded either)
+            let stag = parse_stag_footer(&data)?;
+            eprintln!(
+                "STag footer: song_id={}, media_mid={}",
+                stag.song_id, stag.media_mid
+            );
+            resolve_stag_via_local_library(&stag)?
+        }
+        Err(e) => return Err(e),
+    };
 
     eprintln!(
         "Musicex footer: song_id={}, media_mid={}, filename={}",
@@ -1059,21 +1208,139 @@ pub async fn fetch_ekey(input_path: &Path) -> Result<String, EkeyFetchError> {
         info.filename.clone()
     };
 
-    eprintln!("Fetching ekey from QQ Music API for {}...", api_filename);
-
     let creds = get_qqmusic_credentials()?;
     eprintln!("Found QQ Music credentials (uin={})", creds.uin);
 
-    let ekey = call_get_evkey_api(&creds, &api_filename, &info.media_mid).await?;
+    // The GetEVkey API returns a *different* ekey for the same media_mid
+    // depending on the filename prefix (media quality tier). The local
+    // library copy may carry a prefix for a different quality than the
+    // file we are decrypting, so try candidate prefixes in turn and keep
+    // the first ekey whose decryption yields a plausible audio header.
+    let candidates = candidate_filenames(&api_filename);
+    let mut first_ok: Option<String> = None;
+    let mut last_err: Option<EkeyFetchError> = None;
 
-    eprintln!("Successfully obtained ekey ({} chars)", ekey.len());
+    for fname in &candidates {
+        eprintln!("Fetching ekey from QQ Music API for {}...", fname);
+        match call_get_evkey_api(&creds, fname, &info.media_mid).await {
+            Ok(ekey) => {
+                if first_ok.is_none() {
+                    first_ok = Some(ekey.clone());
+                }
+                if magic_check_ekey(&ekey, &data) {
+                    eprintln!(
+                        "Successfully obtained ekey ({} chars), verified via {}",
+                        ekey.len(),
+                        fname
+                    );
+                    return Ok(ekey);
+                }
+                eprintln!(
+                    "ekey from {} failed audio-header check, trying next prefix...",
+                    fname
+                );
+            }
+            Err(e) => {
+                eprintln!("API error for {}: {}", fname, e);
+                last_err = Some(e);
+            }
+        }
+    }
 
-    Ok(ekey)
+    // No candidate passed the header check: fall back to the first ekey we
+    // managed to obtain (previous behaviour) instead of failing outright.
+    if let Some(ekey) = first_ok {
+        eprintln!(
+            "warning: no candidate ekey passed the audio-header check; \
+             falling back to the first obtained ekey ({} chars)",
+            ekey.len()
+        );
+        return Ok(ekey);
+    }
+    Err(last_err.unwrap_or_else(|| {
+        EkeyFetchError::ParseError("No ekey candidates could be fetched".to_string())
+    }))
+}
+
+/// Quality-tier prefixes used by QQ Music media filenames.
+const MEDIA_PREFIXES: [&str; 10] = [
+    "O4M0", "O8M0", "O9M0", "O6M0", "O7M0", "M800", "M500", "F0M0", "Q0M0", "F000",
+];
+
+/// Build the list of candidate API filenames: the default one first,
+/// then the same media_mid/ext with each alternative quality prefix.
+fn candidate_filenames(default: &str) -> Vec<String> {
+    let mut list = vec![default.to_string()];
+    if default.len() > 4 {
+        let rest = &default[4..];
+        for p in MEDIA_PREFIXES {
+            let cand = format!("{}{}", p, rest);
+            if !list.contains(&cand) {
+                list.push(cand);
+            }
+        }
+    }
+    list
+}
+
+/// Decrypt the first 4 bytes of the ciphertext with `ekey` and check
+/// whether the plaintext looks like a known audio container.
+fn magic_check_ekey(ekey: &str, data: &[u8]) -> bool {
+    if data.len() < 4 {
+        return false;
+    }
+    let Ok(crypto) = Qmc2Crypto::from_ekey(ekey) else {
+        return false;
+    };
+    let mut head = data[..4].to_vec();
+    crypto.decrypt(0, &mut head);
+    crate::looks_like_audio(&head)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_candidate_filenames_rotates_prefix() {
+        let c = candidate_filenames("O4M00010D3os1MQxyZ.mgg");
+        assert_eq!(c[0], "O4M00010D3os1MQxyZ.mgg");
+        assert!(c.contains(&"O8M00010D3os1MQxyZ.mgg".to_string()));
+        assert!(c.contains(&"M5000010D3os1MQxyZ.mgg".to_string()));
+        // no duplicates, default first
+        let mut dedup = c.clone();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(dedup.len(), c.len());
+    }
+
+    #[test]
+    fn test_candidate_filenames_short_name() {
+        // Names shorter than a prefix are returned unchanged (no panic).
+        assert_eq!(candidate_filenames("abc"), vec!["abc".to_string()]);
+    }
+
+    #[test]
+    fn test_magic_check_roundtrip() {
+        // QMC2 ciphers are XOR streams: encrypting "fLaC" with a key and
+        // checking it back with the same key must pass; a different key
+        // must (deterministically) fail.
+        let ekey = "MTIzNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4OTA=";
+        let crypto = Qmc2Crypto::from_ekey(ekey).unwrap();
+        let mut cipher = b"fLaC".to_vec();
+        crypto.decrypt(0, &mut cipher); // XOR stream => encrypt
+        assert_ne!(&cipher[..], b"fLaC");
+        assert!(magic_check_ekey(ekey, &cipher));
+        let other = "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=";
+        assert!(!magic_check_ekey(other, &cipher));
+    }
+
+    #[test]
+    fn test_magic_check_rejects_garbage_ciphertext() {
+        let ekey = "MTIzNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4OTA=";
+        // Random-looking ciphertext must not pass as an audio header.
+        assert!(!magic_check_ekey(ekey, b"\x19\x0b\x69\x74rest-of-ciphertext"));
+    }
 
     #[test]
     fn test_read_utf16_le_string() {

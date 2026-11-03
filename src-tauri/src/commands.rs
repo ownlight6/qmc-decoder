@@ -267,6 +267,12 @@ fn build_file_info(input: &Path) -> Result<FileInfo, String> {
             details.push(("文件名".to_string(), filename.clone()));
             "musicex".to_string()
         }
+        FooterInfo::Stag { song_id, media_mid } => {
+            details.push(("尾部类型".to_string(), "STag".to_string()));
+            details.push(("歌曲 ID".to_string(), song_id.to_string()));
+            details.push(("媒体 MID".to_string(), media_mid.clone()));
+            "STag".to_string()
+        }
         FooterInfo::Unknown => {
             details.push(("尾部类型".to_string(), "未知（未检测到尾部或为 QMC1）".to_string()));
             "未知".to_string()
