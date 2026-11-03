@@ -84,6 +84,8 @@ pub enum FooterInfo {
     V1 { key_size: u32 },
     /// QMC2 v2 (QTag): ekey and song_id embedded at end of file
     QTag { ekey: String, song_id: String },
+    /// STag footer (newer QMC2): ekey NOT embedded, only song_id + media_mid
+    Stag { song_id: u32, media_mid: String },
     /// Newer musicex footer: ekey not embedded in file
     Musicex {
         song_id: u32,
@@ -196,6 +198,26 @@ pub fn detect_footer(data: &[u8]) -> FooterInfo {
         }
     }
 
+    // Check for STag marker (last 4 bytes = "STag"): <meta><u32 BE size><"STag">
+    if data.len() >= 12 && &data[data.len() - 4..] == b"STag" {
+        let meta_size_be =
+            u32::from_be_bytes(data[data.len() - 8..data.len() - 4].try_into().unwrap());
+        let meta_end = data.len() - 8;
+        let meta_start = meta_end.saturating_sub(meta_size_be as usize);
+        if meta_size_be > 0 && meta_start < meta_end {
+            let meta = String::from_utf8_lossy(&data[meta_start..meta_end]).to_string();
+            let fields: Vec<&str> = meta.split(',').collect();
+            let media_mid = fields.last().map(|s| s.trim().to_string()).unwrap_or_default();
+            if !media_mid.is_empty() {
+                let song_id = fields
+                    .first()
+                    .and_then(|s| s.trim().parse::<u32>().ok())
+                    .unwrap_or(0);
+                return FooterInfo::Stag { song_id, media_mid };
+            }
+        }
+    }
+
     // Check for QMC2 v1: last 4 bytes as key size (1..=1024)
     let potential_key_size = u32::from_le_bytes(last4.try_into().unwrap());
     if potential_key_size > 0 && potential_key_size <= 0x400 {
@@ -266,6 +288,14 @@ pub fn decrypt_file(
             let encrypted = &data[..decrypted_data_len];
             let mut decrypted = encrypted.to_vec();
             qmc1::decrypt(&mut decrypted);
+            if !looks_like_audio(&decrypted) {
+                return Err(format!(
+                    "Decrypted output is not recognizable audio (head: {}). \
+                     The fixed QMC1 cipher produced garbage — the file may be \
+                     corrupted or not a QMC1 audio file.",
+                    hex_head(&decrypted)
+                ));
+            }
             let decrypted_bytes = decrypted.len();
             fs::write(output_path, &decrypted)
                 .map_err(|e| format!("Failed to write {}: {}", output_path.display(), e))?;
@@ -292,6 +322,37 @@ pub fn decrypt_file(
                     );
                     let audio_len = data.len() - 8 - (meta_size_be as usize);
                     (ekey.clone(), audio_len)
+                }
+                FooterInfo::Stag { song_id, media_mid } => {
+                    let meta_size_be = u32::from_be_bytes(
+                        data[data.len() - 8..data.len() - 4].try_into().unwrap(),
+                    );
+                    // Strip the STag tail so the output is a clean audio stream
+                    let audio_len = data.len().saturating_sub(8 + meta_size_be as usize);
+
+                    if let Some(key) = ekey {
+                        (key.to_string(), audio_len)
+                    } else if fetch_ekey {
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .map_err(|e| format!("Failed to create async runtime: {}", e))?;
+                        let fetched_ekey =
+                            rt.block_on(async { ekey_fetch::fetch_ekey(input_path).await })
+                                .map_err(|e| format!("{}", e))?;
+                        (fetched_ekey, audio_len)
+                    } else {
+                        return Err(format!(
+                            "This file uses the STag format (song_id={}, media_mid={}).\n\
+                             The encryption key (ekey) is NOT embedded in the file.\n\n\
+                             You can either:\n\
+                             1. Provide the ekey via --ekey argument\n\
+                             2. Use --fetch-ekey: it can resolve this format when a musicex copy\n\
+                                of the same song exists in the local QQ Music library\n\n\
+                             Run with --info to see file metadata.",
+                            song_id, media_mid
+                        ));
+                    }
                 }
                 FooterInfo::V1 { key_size } => {
                     let key_start = data.len() - 4 - (*key_size as usize);
@@ -365,6 +426,19 @@ pub fn decrypt_file(
                 .map_err(|e| format!("Failed to initialize QMC2 crypto: {}", e))?;
             crypto.decrypt(0, &mut decrypted);
 
+            if !looks_like_audio(&decrypted) {
+                return Err(format!(
+                    "Decrypted output is not recognizable audio (head: {}). \
+                     The ekey does not match this file's ciphertext. This happens \
+                     when QQ Music has rotated the underlying media server-side: \
+                     the API now serves an ekey for a newer media file, while this \
+                     file was encrypted with the retired one. \
+                     Re-download the song with a current client/tool, or decrypt \
+                     a freshly downloaded copy.",
+                    hex_head(&decrypted)
+                ));
+            }
+
             let decrypted_bytes = decrypted.len();
             fs::write(output_path, &decrypted)
                 .map_err(|e| format!("Failed to write {}: {}", output_path.display(), e))?;
@@ -377,6 +451,31 @@ pub fn decrypt_file(
             })
         }
     }
+}
+
+/// Check whether a byte slice starts with a known audio container header.
+///
+/// Used to verify decryption results: a wrong ekey (e.g. after a server-side
+/// media rotation) produces random-looking bytes instead of a real stream.
+pub fn looks_like_audio(data: &[u8]) -> bool {
+    if data.len() < 4 {
+        return false;
+    }
+    let head = &data[..4];
+    head == b"fLaC"
+        || head == b"OggS"
+        || head.starts_with(b"ID3")
+        || head == b"RIFF"
+        || (head[0] == 0xFF && (head[1] & 0xE0) == 0xE0) // MPEG frame sync
+}
+
+/// First bytes of `data` as a hex string (for error messages).
+fn hex_head(data: &[u8]) -> String {
+    data[..data.len().min(8)]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Get file metadata without decrypting
